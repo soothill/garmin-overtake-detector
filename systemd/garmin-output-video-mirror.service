@@ -1,0 +1,16 @@
+[Unit]
+Description=Mirror generated Garmin videos to a media server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=GARMIN_OUTPUT_BATCH=paired-parallel-v1
+EnvironmentFile=-%h/.config/garmin-overtake-detector/environment
+ExecStart=%h/garmin-overtake-detector/mirror-output-videos.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=default.target

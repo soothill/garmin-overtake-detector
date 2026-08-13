@@ -1,0 +1,19 @@
+[Unit]
+Description=Review skipped Garmin passes and create rear-only fallback clips
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/garmin-overtake-detector
+EnvironmentFile=-%h/.config/garmin-overtake-detector/environment
+ExecStartPre=-/usr/bin/docker rm -f garmin-overtakes-skipped-review
+ExecStart=%h/garmin-overtake-detector/review-skipped-evox3.sh
+ExecStopPost=-/usr/bin/docker rm -f garmin-overtakes-skipped-review
+Restart=on-failure
+RestartSec=30
+RestartPreventExitStatus=65
+TimeoutStartSec=infinity
+TimeoutStopSec=45
+KillMode=control-group
+UMask=0022
+SyslogIdentifier=garmin-overtakes-skipped-review

@@ -1,0 +1,20 @@
+output/
+review/
+npu/
+amd-ryzenai-sw/
+__pycache__/
+*.py[cod]
+*.log
+.env
+.venv/
+.pytest_cache/
+.DS_Store
+
+# Camera footage and generated media must never enter Git.
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.jpg
+*.jpeg
+*.png

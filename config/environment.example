@@ -1,0 +1,28 @@
+# Copy to ~/.config/garmin-overtake-detector/environment and edit.
+# This syntax is read by systemd EnvironmentFile; do not use shell expansion.
+
+GARMIN_BATCH_NAME=paired-parallel-v1
+GARMIN_SOURCE_MOUNT=/mnt/garmin
+GARMIN_FRONT_DIR=varia-vue
+GARMIN_REAR_DIR=rct715
+
+# Leave these at 0 to accept the inventory found when a new manifest is made.
+# Set exact counts once your archive is stable to detect missing source files.
+GARMIN_EXPECTED_FRONT_FILES=0
+GARMIN_EXPECTED_REAR_FILES=0
+
+GARMIN_MINIMUM_FREE_GIB=100
+GARMIN_HEARTBEAT_TIMEOUT_SECONDS=300
+GARMIN_MAX_SOURCE_FAILURES=3
+GARMIN_MAX_COMPOSITION_FAILURES=3
+GARMIN_COMPOSITION_WORKERS=3
+GARMIN_DOCKER_IMAGE=garmin-overtakes:rocm7.14-yolov8s
+
+# Optional validated-output mirror. Keep the timer disabled until these are set.
+# Example: media@media-server.local:/srv/garmin-output/
+GARMIN_OUTPUT_DESTINATION=
+GARMIN_OUTPUT_SSH_KEY=
+GARMIN_OUTPUT_BWLIMIT_KIB=50000
+
+# Optional NPU experiment only; the production detector uses the GPU.
+# RYZEN_AI_ROOT=/home/your-user/.local/share/lemonade-linux-hybrid/ryzenai-1.7.1

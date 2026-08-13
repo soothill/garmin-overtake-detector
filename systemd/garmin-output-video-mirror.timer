@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically mirror generated Garmin videos to a media server
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=garmin-output-video-mirror.service
+
+[Install]
+WantedBy=timers.target
