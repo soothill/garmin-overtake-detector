@@ -322,6 +322,16 @@ class NpuDetector:
                 f"NPU provider unavailable: {self.session.get_providers()}"
             )
         self.input_name = self.session.get_inputs()[0].name
+        self.input_shape = list(self.session.get_inputs()[0].shape)
+        if len(self.input_shape) != 4:
+            raise RuntimeError(f"unsupported NPU input shape: {self.input_shape}")
+        if self.input_shape[1] == 3:
+            self.input_layout = "NCHW"
+        elif self.input_shape[-1] == 3:
+            self.input_layout = "NHWC"
+        else:
+            raise RuntimeError(f"unsupported NPU image layout: {self.input_shape}")
+        self.output_shapes = [list(item.shape) for item in self.session.get_outputs()]
         self.decode_outputs = decode_outputs
         self.confidence = args.confidence
         self.iou = args.iou
@@ -330,8 +340,11 @@ class NpuDetector:
 
     def infer(self, frame: np.ndarray) -> list[Detection]:
         canvas, scale, pad_left, pad_top = letterbox_rgb(frame, self.model_size)
+        input_data = canvas.astype(np.float32) / 255.0
+        if self.input_layout == "NCHW":
+            input_data = np.transpose(input_data, (2, 0, 1))
         outputs = self.session.run(
-            None, {self.input_name: canvas.astype(np.float32)[None, ...] / 255.0}
+            None, {self.input_name: input_data[None, ...]}
         )
         decoded = self.decode_outputs(
             outputs,
@@ -355,6 +368,9 @@ class NpuDetector:
             "device": "Ryzen AI NPU",
             "precision": "AMD quantized",
             "providers": self.session.get_providers(),
+            "input_layout": self.input_layout,
+            "input_shape": self.input_shape,
+            "output_shapes": self.output_shapes,
         }
 
     def close(self) -> None:

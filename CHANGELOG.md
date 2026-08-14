@@ -10,6 +10,10 @@
   detection consensus for quality-parity review.
 - Reject contaminated AMD idle baselines and Hailo runs with new undervoltage
   or throttling events.
+- Export the exact GPU YOLOv8s weights to ONNX, build a held-out-camera-calibrated
+  Quark XINT8 graph and run it on Ryzen AI for a controlled same-model comparison.
+- Decode standard one-output YOLOv8 graphs on the NPU and record input layout,
+  compiled cache identity and whole-package power alongside direct NPU power.
 
 ## 1.0.0 - 2026-08-13
 

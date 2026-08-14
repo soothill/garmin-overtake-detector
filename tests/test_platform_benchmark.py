@@ -19,6 +19,11 @@ except ImportError:
     np = None
     CommonTracker = Detection = _hailo_class_arrays = None
 
+try:
+    from npu_detect_frames import decode_outputs
+except ImportError:
+    decode_outputs = None
+
 
 class PlatformBenchmarkTests(unittest.TestCase):
     @unittest.skipIf(np is None, "NumPy is supplied by the benchmark runtimes")
@@ -37,6 +42,28 @@ class PlatformBenchmarkTests(unittest.TestCase):
         classes = _hailo_class_arrays(raw)
         self.assertEqual(classes[2].shape, (100, 5))
         self.assertAlmostEqual(float(classes[2][0, 4]), 0.75)
+
+    @unittest.skipIf(
+        np is None or decode_outputs is None,
+        "NumPy and ONNX Runtime are supplied by the NPU runtime",
+    )
+    def test_standard_yolov8_npu_output_is_decoded(self):
+        output = np.zeros((1, 84, 8400), dtype=np.float32)
+        output[0, :4, 0] = [320.0, 320.0, 200.0, 100.0]
+        output[0, 4 + 2, 0] = 0.9
+        detections = decode_outputs(
+            [output],
+            confidence=0.2,
+            iou_threshold=0.5,
+            scale=1.0,
+            pad_left=0,
+            pad_top=0,
+            frame_width=640,
+            frame_height=640,
+        )
+        self.assertEqual(len(detections), 1)
+        self.assertEqual(detections[0]["class_id"], 2)
+        self.assertEqual(detections[0]["box"], [220.0, 270.0, 420.0, 370.0])
 
     def test_amd_power_summary_includes_idle_adjusted_energy(self):
         rows = [

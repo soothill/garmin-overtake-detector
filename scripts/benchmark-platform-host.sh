@@ -134,6 +134,7 @@ case "$backend" in
     command=(
       "$ryzen_ai_root/bin/python" "$script_dir/platform_video_benchmark.py"
       "${common[@]}" --model "$npu_model" --cache-dir "$npu_cache"
+      --cache-key "${PLATFORM_BENCH_NPU_CACHE_KEY:-paired-platform-benchmark-v1}"
       --decode vaapi --ffmpeg "$script_dir/scripts/container-ffmpeg.sh"
       --ffprobe "$script_dir/scripts/container-ffprobe.sh"
     )

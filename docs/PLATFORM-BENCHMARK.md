@@ -28,19 +28,22 @@ from the timer and recorded in `cache-precondition.json`.
 
 ## Fairness and limitations
 
-The workload around the detector is identical, but the deployed models are
-not:
+The workload around the detector is identical.  Two result sets are retained:
+the original deployable models, and a controlled GPU/NPU run which starts from
+the exact same YOLOv8s weights.
 
 | Backend | Model | Runtime |
 |---|---|---|
 | Radeon GPU | YOLOv8s FP16 | ROCm PyTorch / Ultralytics |
-| Ryzen AI NPU | AMD quantized YOLOv8m | Vitis AI Execution Provider |
+| Ryzen AI NPU | exact GPU YOLOv8s source, Quark XINT8 | Vitis AI Execution Provider |
 | Hailo-8L | quantized YOLOv8s HEF | HailoRT |
 
-The result is therefore a **platform workflow comparison**, not an isolated
-silicon or model comparison.  Always compare vehicle-detection and candidate
-event counts alongside energy.  A backend which saves energy by missing much
-of the workload has not produced an equivalent result.
+The GPU/NPU pair has exact source-weight provenance.  The Hailo artifact has
+the same YOLOv8s architecture, but its vendor HEF does not expose the original
+training-weight hash.  The result remains a **platform workflow comparison**,
+not an isolated-silicon comparison.  Always compare vehicle-detection and
+candidate-event counts alongside energy.  A backend which saves energy by
+missing much of the workload has not produced an equivalent result.
 
 Power boundaries are also explicit:
 
@@ -114,12 +117,15 @@ to the host runner.
 ## Host preparation
 
 The existing ROCm container supplies the GPU runtime and media tools.  The NPU
-host needs AMD's Ryzen AI 1.7.1 environment, XRT and the quantized YOLOv8m
-model.  Set:
+host needs AMD's Ryzen AI 1.7.1 environment and XRT.  To retain the original
+vendor-model baseline, point it at that graph.  For the controlled run, build
+the Quark XINT8 graph from the exact GPU weights as described in
+[NPU.md](NPU.md), then set:
 
 ```bash
-export PLATFORM_BENCH_NPU_MODEL="$HOME/models/amd-yolov8m/yolov8m.onnx"
+export PLATFORM_BENCH_NPU_MODEL="$HOME/models/yolov8s/yolov8s-xint8.onnx"
 export PLATFORM_BENCH_NPU_CACHE="$HOME/platform-benchmark/npu-cache"
+export PLATFORM_BENCH_NPU_CACHE_KEY=paired-yolov8s-xint8-v1
 ```
 
 The Hailo host needs HailoRT, its Python package, FFmpeg and the YOLOv8s HEF.
@@ -253,10 +259,9 @@ The report also divides wall time and measured energy by the consensus events
 that each platform actually supported.  This quality-adjusted view prevents a
 backend from appearing efficient merely because it returned less useful work.
 
-Exact counts are not expected from the default deployment graphs.  The NPU
-uses a different model size and quantization from the GPU and Hailo backends;
-preprocessing, output decoding and non-maximum suppression can also move an
-event across the common threshold.  To make output quality comparable:
+Even with exact source weights, quantization, execution-provider partitioning,
+preprocessing, output decoding and non-maximum suppression can move an event
+across the common threshold.  To make output quality comparable:
 
 1. create a small human-labelled validation set from representative day,
    night, rain, close-pass and partial-occlusion footage;
@@ -278,7 +283,7 @@ Repeat each run at least three times, alternate platform order, and use the
 median for a publication-quality conclusion.  One complete run is useful for
 engineering direction, but it does not quantify run-to-run variance.
 
-## Measured engineering result
+## Measured same-model engineering result
 
 One complete run used a roughly 95-minute file from each camera: 3.168 source
 hours in total.  The fixed protocol was 5 fps, 640-pixel detection width,
@@ -287,19 +292,28 @@ hours in total.  The fixed protocol was 5 fps, 640-pixel detection width,
 
 | Platform | Wall time | Real-time factor | Gross energy | Wh/source-hour | Candidates | Two-of-three consensus coverage |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Radeon GPU | 12.26 min | 15.719x | 14.93 Wh package | 4.713 | 153 | 94.00% |
-| Ryzen AI NPU | 27.58 min | 6.955x | 19.48 Wh package | 6.147 | 126 | 78.67% |
-| Hailo-8L | 63.35 min | 3.001x | 4.81 Wh Pi PMIC rails | 1.517 | 176 | 97.33% |
+| Radeon GPU YOLOv8s | 12.26 min | 15.719x | 14.93 Wh package | 4.713 | 153 | 92.21% |
+| Ryzen AI NPU YOLOv8s XINT8 | 28.07 min | 6.774x | 41.42 Wh package | 13.074 | 167 | 94.81% |
+| Hailo-8L YOLOv8s HEF | 63.35 min | 3.001x | 4.81 Wh Pi PMIC rails | 1.517 | 176 | 96.75% |
 
-For the directly comparable GPU/NPU result, the GPU finished 55.55% sooner and
-used 23.33% less gross package energy (10.55% less after subtracting each idle
+For the directly comparable GPU/NPU result, the GPU finished 56.32% sooner and
+used 63.95% less gross package energy (65.20% less after subtracting each idle
 baseline).  It was therefore both faster and more energy-efficient for this
 end-to-end workload.  The Hailo energy is deliberately excluded from that
 ranking because its internal Pi rail measurement is not the same boundary.
 
-The three backends produced 150 two-of-three consensus event clusters.  GPU,
-NPU and Hailo supported 141, 118 and 146 respectively.  Fifty candidates were
-reported by only one platform: 12 GPU, 8 NPU and 30 Hailo.  Human review of
-those disagreements is required before calling them misses or false positives.
+The three backends produced 154 two-of-three consensus event clusters.  GPU,
+NPU and Hailo supported 142, 146 and 149 respectively.  Same-source YOLOv8s
+raised NPU consensus coverage by 16.14 percentage points over the earlier
+YOLOv8m deployment.  Human review of remaining disagreements is required
+before calling them misses or false positives.
+
+The NPU core averaged only 1.92 W, while the complete APU package averaged
+88.54 W.  About 79.28 W of CPU-core power was observed during the run.  This
+shows that the standard ONNX deployment leaves substantial work around the
+compiled XINT8 subgraph.  A raw-head, compiler-friendly export and reduced CPU
+post-processing are the next efficiency experiments.  Direct NPU watts must
+not be reported as whole-workflow efficiency.
+
 The full result also needs repeated, alternating-order trials before quoting a
 confidence interval.

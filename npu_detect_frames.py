@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run AMD's quantized YOLOv8m NPU model on RGB frames and decode detections."""
+"""Run quantized YOLOv8 NPU models on RGB frames and decode detections."""
 
 from __future__ import annotations
 
@@ -118,6 +118,18 @@ def decode_outputs(
     frame_width: int,
     frame_height: int,
 ) -> list[dict]:
+    if len(outputs) == 1:
+        return decode_standard_yolov8_output(
+            outputs[0],
+            confidence,
+            iou_threshold,
+            scale,
+            pad_left,
+            pad_top,
+            frame_width,
+            frame_height,
+        )
+
     feature_maps = [output.transpose(0, 3, 1, 2) for output in outputs]
     combined = np.concatenate(
         [feature.reshape(feature.shape[0], 144, -1) for feature in feature_maps],
@@ -144,6 +156,79 @@ def decode_outputs(
     selected_boxes = boxes[:, selected].T
     selected_scores = scores[selected]
     selected_classes = class_ids[selected]
+    return serialize_detections(
+        selected_boxes,
+        selected_scores,
+        selected_classes,
+        iou_threshold,
+        scale,
+        pad_left,
+        pad_top,
+        frame_width,
+        frame_height,
+    )
+
+
+def decode_standard_yolov8_output(
+    output: np.ndarray,
+    confidence: float,
+    iou_threshold: float,
+    scale: float,
+    pad_left: int,
+    pad_top: int,
+    frame_width: int,
+    frame_height: int,
+) -> list[dict]:
+    """Decode the standard Ultralytics ``1x84x8400`` prediction tensor."""
+
+    predictions = np.asarray(output, dtype=np.float32)
+    if predictions.ndim != 3 or predictions.shape[0] != 1:
+        raise RuntimeError(f"unsupported standard YOLOv8 output shape: {predictions.shape}")
+    if predictions.shape[1] == 84:
+        predictions = predictions[0].T
+    elif predictions.shape[2] == 84:
+        predictions = predictions[0]
+    else:
+        raise RuntimeError(f"unsupported standard YOLOv8 output shape: {predictions.shape}")
+
+    class_probabilities = np.clip(predictions[:, 4:], 0.0, 1.0)
+    class_ids = np.argmax(class_probabilities, axis=1)
+    scores = class_probabilities[np.arange(class_probabilities.shape[0]), class_ids]
+    selected = np.flatnonzero(
+        (scores >= confidence) & np.isin(class_ids, tuple(VEHICLE_CLASSES))
+    )
+    if not selected.size:
+        return []
+
+    centers = predictions[selected, :2]
+    sizes = predictions[selected, 2:4]
+    selected_boxes = np.concatenate(
+        (centers - sizes / 2.0, centers + sizes / 2.0), axis=1
+    )
+    return serialize_detections(
+        selected_boxes,
+        scores[selected],
+        class_ids[selected],
+        iou_threshold,
+        scale,
+        pad_left,
+        pad_top,
+        frame_width,
+        frame_height,
+    )
+
+
+def serialize_detections(
+    selected_boxes: np.ndarray,
+    selected_scores: np.ndarray,
+    selected_classes: np.ndarray,
+    iou_threshold: float,
+    scale: float,
+    pad_left: int,
+    pad_top: int,
+    frame_width: int,
+    frame_height: int,
+) -> list[dict]:
     detections: list[dict] = []
     for class_id in sorted(set(selected_classes.tolist())):
         class_positions = np.flatnonzero(selected_classes == class_id)
@@ -211,10 +296,21 @@ def main() -> int:
         raise RuntimeError(f"NPU provider unavailable: {session.get_providers()}")
 
     input_name = session.get_inputs()[0].name
+    input_shape = list(session.get_inputs()[0].shape)
+    if len(input_shape) != 4:
+        raise RuntimeError(f"unsupported model input shape: {input_shape}")
+    if input_shape[1] == 3:
+        input_layout = "NCHW"
+    elif input_shape[-1] == 3:
+        input_layout = "NHWC"
+    else:
+        raise RuntimeError(f"unsupported model input layout: {input_shape}")
     results = []
     for specification in args.frame:
         timestamp, path, frame = load_frame(specification, args.width, args.height)
         input_data, scale, pad_left, pad_top = letterbox(frame)
+        if input_layout == "NCHW":
+            input_data = np.transpose(input_data[0], (2, 0, 1))[None, ...]
         started = time.monotonic()
         outputs = session.run(None, {input_name: input_data})
         inference_ms = (time.monotonic() - started) * 1000.0
@@ -240,6 +336,8 @@ def main() -> int:
     payload = {
         "model": str(args.model),
         "providers": session.get_providers(),
+        "input_layout": input_layout,
+        "input_shape": input_shape,
         "confidence": args.confidence,
         "iou": args.iou,
         "frames": results,

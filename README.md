@@ -146,25 +146,31 @@ supports the ROCm GPU, Ryzen AI NPU and Hailo-8L backends.  The accompanying
 host runner records wall-clock time, AMD SMI package/accelerator power, or
 Raspberry Pi PMIC output-rail power with an idle baseline.
 
-This is a deployment-efficiency test, not a claim that the three accelerators
-execute an identical graph: GPU and Hailo use YOLOv8s, while AMD's available
-Ryzen AI model is a quantized YOLOv8m.  Detection and event totals are included
-so power cannot be interpreted without output quality.  See
+The harness supports both a deployable-workflow comparison and a controlled
+GPU/NPU comparison.  The controlled run exports the exact GPU YOLOv8s weights,
+quantizes them to XINT8 with AMD Quark and executes that graph through Ryzen
+AI.  Detection and event totals are included so power cannot be interpreted
+without output quality.  See
 [Platform efficiency benchmark](docs/PLATFORM-BENCHMARK.md) for setup,
 measurement boundaries and reproducible commands.
 
-On one complete 3.168-source-hour paired recording, the clean Radeon run took
-12.26 minutes and 14.93 Wh of APU package energy.  The Ryzen AI NPU took 27.58
-minutes and 19.48 Wh on the same package boundary.  The GPU was 2.25 times
-faster and used 23.33% less gross energy.  Hailo-8L took 63.35 minutes and
-measured 4.81 Wh across Raspberry Pi PMIC output rails; that smaller internal
-boundary is directional and is not ranked against APU package power.
+On one complete 3.168-source-hour paired recording, the Radeon YOLOv8s run took
+12.26 minutes and 14.93 Wh of APU package energy.  The same-source YOLOv8s XINT8
+NPU run took 28.07 minutes and 41.42 Wh on the same package boundary.  The GPU
+was 2.29 times faster and used 63.95% less gross energy.  The NPU accelerator
+itself averaged only 1.92 W; most package power came from CPU work around the
+compiled subgraph, making execution-provider partitioning the next optimization.
+Hailo-8L took 63.35 minutes and measured 4.81 Wh across Raspberry Pi PMIC output
+rails; that smaller internal boundary is directional and is not ranked against
+APU package power.
 
-Across 150 events supported by at least two platforms, GPU, NPU and Hailo found
-94.00%, 78.67% and 97.33% respectively.  Hailo also produced more
-single-platform candidates, so the result is detection agreement rather than
-labelled precision or recall.  The benchmark guide describes how to build a
-labelled set, calibrate per-backend thresholds and move toward equal recall.
+Across 154 events supported by at least two platforms, GPU, same-model NPU and
+Hailo found 92.21%, 94.81% and 96.75% respectively.  The NPU's coverage rose
+16.14 percentage points over the earlier vendor YOLOv8m deployment, showing
+why model parity matters.  NPU and Hailo also produced more unconfirmed
+candidates, so this is detection agreement rather than labelled precision or
+recall.  The benchmark guide describes how to build a labelled set, calibrate
+per-backend thresholds and move toward equal recall.
 
 ## Useful commands
 
