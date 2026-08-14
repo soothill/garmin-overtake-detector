@@ -259,9 +259,9 @@ class HardenedBatchTests(unittest.TestCase):
 
     def test_burned_in_clock_parser_ignores_other_overlay_fields(self):
         parsed = parse_overlay_clock(
-            "GARMIN 22/05/2026 08:41:36 52.08517 -0.72872 20 MPH"
+            "GARMIN 15/01/2026 08:41:36 00.00000 00.00000 20 MPH"
         )
-        self.assertEqual(parsed.isoformat(), "2026-05-22T08:41:36")
+        self.assertEqual(parsed.isoformat(), "2026-01-15T08:41:36")
 
     def test_burned_in_clock_parser_rejects_invalid_ocr_values(self):
         with self.assertRaisesRegex(RuntimeError, "camera timestamp is invalid"):

@@ -138,6 +138,34 @@ for other roads, camera positions or lighting.
 
 See [Performance notes](docs/PERFORMANCE.md) for interpretation and tuning.
 
+## GPU, NPU and Hailo efficiency harness
+
+`platform_video_benchmark.py` runs one front/rear pair through a shared
+decoder, deterministic tracker, trajectory evaluator and report writer.  It
+supports the ROCm GPU, Ryzen AI NPU and Hailo-8L backends.  The accompanying
+host runner records wall-clock time, AMD SMI package/accelerator power, or
+Raspberry Pi PMIC output-rail power with an idle baseline.
+
+This is a deployment-efficiency test, not a claim that the three accelerators
+execute an identical graph: GPU and Hailo use YOLOv8s, while AMD's available
+Ryzen AI model is a quantized YOLOv8m.  Detection and event totals are included
+so power cannot be interpreted without output quality.  See
+[Platform efficiency benchmark](docs/PLATFORM-BENCHMARK.md) for setup,
+measurement boundaries and reproducible commands.
+
+On one complete 3.168-source-hour paired recording, the clean Radeon run took
+12.26 minutes and 14.93 Wh of APU package energy.  The Ryzen AI NPU took 27.58
+minutes and 19.48 Wh on the same package boundary.  The GPU was 2.25 times
+faster and used 23.33% less gross energy.  Hailo-8L took 63.35 minutes and
+measured 4.81 Wh across Raspberry Pi PMIC output rails; that smaller internal
+boundary is directional and is not ranked against APU package power.
+
+Across 150 events supported by at least two platforms, GPU, NPU and Hailo found
+94.00%, 78.67% and 97.33% respectively.  Hailo also produced more
+single-platform candidates, so the result is detection agreement rather than
+labelled precision or recall.  The benchmark guide describes how to build a
+labelled set, calibrate per-backend thresholds and move toward equal recall.
+
 ## Useful commands
 
 ```bash
