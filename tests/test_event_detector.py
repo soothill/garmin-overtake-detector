@@ -101,6 +101,22 @@ class EventDetectorTests(unittest.TestCase):
         track.add(box(0.2, 0.70, 0.70, 0.15, 0.18))
         self.assertFalse(evaluate_track(track, "front")["candidate"])
 
+    def test_single_endpoint_box_jitter_does_not_reject_real_front_pass(self):
+        track = TrackHistory(track_id=15, class_id=2)
+        for observation in [
+            box(0.0, 0.82, 0.92, 0.36, 0.42),
+            box(0.2, 0.78, 0.85, 0.31, 0.36),
+            box(0.4, 0.72, 0.76, 0.25, 0.29),
+            box(0.8, 0.65, 0.65, 0.18, 0.21),
+            box(1.0, 0.59, 0.57, 0.13, 0.15),
+            # One badly localized final box used to dominate endpoint tests.
+            box(1.2, 0.84, 0.88, 0.30, 0.35),
+        ]:
+            track.add(observation)
+        result = evaluate_track(track, "front")
+        self.assertTrue(result["candidate"])
+        self.assertEqual(result["geometry_filter"], "rolling_median_3")
+
 
 if __name__ == "__main__":
     unittest.main()

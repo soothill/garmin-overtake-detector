@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import time
+from statistics import median
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
@@ -73,6 +74,7 @@ class Thresholds:
     centerline_tolerance: float = 0.04
     max_peak_fraction_front: float = 0.45
     min_peak_fraction_rear: float = 0.45
+    robust_window: int = 3
 
 
 def _linear_slope(points: Sequence[tuple[float, float]]) -> float:
@@ -84,6 +86,19 @@ def _linear_slope(points: Sequence[tuple[float, float]]) -> float:
     if denominator <= 1e-12:
         return 0.0
     return sum((x - mean_x) * (y - mean_y) for x, y in points) / denominator
+
+
+def _rolling_median(values: Sequence[float], window: int) -> list[float]:
+    if window < 1 or window % 2 == 0:
+        raise ValueError("robust window must be a positive odd number")
+    if len(values) < window:
+        return [float(value) for value in values]
+    radius = window // 2
+    result = []
+    for index in range(len(values)):
+        start = min(max(0, index - radius), len(values) - window)
+        result.append(float(median(values[start : start + window])))
+    return result
 
 
 def evaluate_track(
@@ -98,7 +113,20 @@ def evaluate_track(
     if not observations:
         raise ValueError("track has no observations")
 
-    areas = [max(observation.area, 1e-9) for observation in observations]
+    raw_areas = [max(observation.area, 1e-9) for observation in observations]
+    use_robust_geometry = len(observations) >= max(5, thresholds.robust_window)
+    if use_robust_geometry:
+        areas = _rolling_median(raw_areas, thresholds.robust_window)
+        center_x_values = _rolling_median(
+            [item.center_x for item in observations], thresholds.robust_window
+        )
+        bottom_values = _rolling_median(
+            [item.bottom for item in observations], thresholds.robust_window
+        )
+    else:
+        areas = raw_areas
+        center_x_values = [item.center_x for item in observations]
+        bottom_values = [item.bottom for item in observations]
     peak_index = max(range(len(areas)), key=areas.__getitem__)
     peak = observations[peak_index]
     peak_area = areas[peak_index]
@@ -106,36 +134,45 @@ def evaluate_track(
     first_area = areas[0]
     duration = track.last_seen - track.first_seen
     peak_fraction = peak_index / max(1, len(observations) - 1)
-    side_offset = abs(peak.center_x - 0.5)
+    peak_center_x = center_x_values[peak_index]
+    peak_bottom = bottom_values[peak_index]
+    side_offset = abs(peak_center_x - 0.5)
 
     if camera == "front":
         tail = observations[peak_index:]
-        endpoint = observations[-1]
+        endpoint_index = len(observations) - 1
         area_ratio = peak_area / max(final_area, 1e-9)
-        vertical_travel = peak.bottom - endpoint.bottom
+        vertical_travel = peak_bottom - bottom_values[endpoint_index]
         direction_slope = _linear_slope(
-            [(item.timestamp, math.log(max(item.area, 1e-9))) for item in tail]
+            [
+                (item.timestamp, math.log(max(areas[peak_index + offset], 1e-9)))
+                for offset, item in enumerate(tail)
+            ]
         )
         peak_position_ok = peak_fraction <= thresholds.max_peak_fraction_front
         direction_ok = direction_slope < 0.0
     elif camera == "rear":
         head = observations[: peak_index + 1]
-        endpoint = observations[0]
+        endpoint_index = 0
         area_ratio = peak_area / max(first_area, 1e-9)
-        vertical_travel = peak.bottom - endpoint.bottom
+        vertical_travel = peak_bottom - bottom_values[endpoint_index]
         direction_slope = _linear_slope(
-            [(item.timestamp, math.log(max(item.area, 1e-9))) for item in head]
+            [
+                (item.timestamp, math.log(max(areas[offset], 1e-9)))
+                for offset, item in enumerate(head)
+            ]
         )
         peak_position_ok = peak_fraction >= thresholds.min_peak_fraction_rear
         direction_ok = direction_slope > 0.0
     else:
         raise ValueError(f"unsupported camera orientation: {camera}")
 
-    endpoint_offset = abs(endpoint.center_x - 0.5)
-    lateral_travel = abs(peak.center_x - endpoint.center_x)
+    endpoint_center_x = center_x_values[endpoint_index]
+    endpoint_offset = abs(endpoint_center_x - 0.5)
+    lateral_travel = abs(peak_center_x - endpoint_center_x)
     radial_ratio = vertical_travel / max(lateral_travel, 1e-6)
-    peak_side = peak.center_x - 0.5
-    endpoint_side = endpoint.center_x - 0.5
+    peak_side = peak_center_x - 0.5
+    endpoint_side = endpoint_center_x - 0.5
     centerline_consistent = (
         peak_side * endpoint_side >= 0.0
         or endpoint_offset <= thresholds.centerline_tolerance
@@ -183,6 +220,11 @@ def evaluate_track(
         "side_offset": round(side_offset, 3),
         "direction_slope": round(direction_slope, 4),
         "peak_fraction": round(peak_fraction, 3),
+        "geometry_filter": (
+            f"rolling_median_{thresholds.robust_window}"
+            if use_robust_geometry
+            else "raw_short_track"
+        ),
         "max_confidence": round(max(item.confidence for item in observations), 4),
         "detections": len(observations),
     }

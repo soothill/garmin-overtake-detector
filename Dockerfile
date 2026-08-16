@@ -49,6 +49,10 @@ COPY overtake_pipeline.py /app/overtake_pipeline.py
 COPY summarize_batch.py validate_batch_result.py validate_combined_result.py \
   calibrate_pair_offset.py compose_paired_events.py review_skipped_events.py \
   recompose_combined_layout.py /app/
+COPY check_pi_health.py npu_detect_frames.py platform_video_benchmark.py \
+  prepare_platform_review.py sample_pi_pmic.py select_benchmark_pair.py \
+  summarize_platform_power.py summarize_platform_results.py \
+  wait_for_amd_idle.py /app/
 COPY tests /app/tests
 
 RUN cd /app && python3 -m unittest discover -s tests -v

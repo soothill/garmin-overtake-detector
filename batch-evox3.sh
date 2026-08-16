@@ -30,6 +30,7 @@ batch_start=$(date +%s)
 power_csv="$batch_root/power.csv"
 power_log="$batch_root/power-monitor.log"
 detection_complete="$batch_root/detection.complete"
+excluded_sources_evidence="$batch_root/excluded-sources.tsv"
 
 write_status() {
   local state=$1 message=${2:-}
@@ -87,6 +88,9 @@ if ! flock -n 9; then
 fi
 
 if [[ ! -f "$manifest" ]]; then
+  if [[ -n "$source_exclude_file" ]]; then
+    install -m 0644 -- "$source_exclude_file" "$excluded_sources_evidence"
+  fi
   manifest_tmp="$manifest.tmp.$$"
   printf 'camera\tdate\tsource\tduration_seconds\tsize_bytes\tresult_dir\tbenchmark_dir\n' \
     >"$manifest_tmp"
@@ -97,6 +101,10 @@ if [[ ! -f "$manifest" ]]; then
       filename=$(basename -- "$source_host")
       stem=${filename%.mp4}
       source_container="/videos/${source_host#"$source_mount"/}"
+      if source_is_excluded "$source_container"; then
+        echo "excluding superseded source: $source_container"
+        continue
+      fi
       probe=$(docker run --rm --volume "$source_mount":/videos:ro \
         --entrypoint ffprobe "$docker_image" \
         -v error -show_entries format=duration,size -of csv=p=0 "$source_container")

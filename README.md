@@ -138,6 +138,43 @@ for other roads, camera positions or lighting.
 
 See [Performance notes](docs/PERFORMANCE.md) for interpretation and tuning.
 
+## GPU, NPU and Hailo efficiency harness
+
+`platform_video_benchmark.py` runs one front/rear pair through a shared
+decoder, deterministic tracker, trajectory evaluator and report writer.  It
+supports the ROCm GPU, Ryzen AI NPU and Hailo-8L backends.  The accompanying
+host runner records wall-clock time, AMD SMI package/accelerator power, or
+Raspberry Pi PMIC output-rail power with an idle baseline.
+
+The harness supports both a deployable-workflow comparison and a controlled
+GPU/NPU comparison.  The controlled run exports the exact GPU YOLOv8s weights,
+quantizes them to XINT8 with AMD Quark and executes that graph through Ryzen
+AI.  Detection and event totals are included so power cannot be interpreted
+without output quality.  See
+[Platform efficiency benchmark](docs/PLATFORM-BENCHMARK.md) for setup,
+measurement boundaries and reproducible commands. See the
+[Hailo-8L model build](docs/HAILO.md) for compiling the exact GPU weights into
+an HEF and preserving calibration and model hashes.
+
+The hardened parity rerun on one complete 3.168-source-hour paired recording
+uses RGB24, common 0.10 continuation/0.20 track-start confidence, 0.50 NMS,
+class-agnostic vehicle association and robust trajectory geometry. Radeon GPU
+finished in 18.43 minutes and used 20.89 Wh of APU package energy. Same-source
+YOLOv8s XINT8 on the NPU took 27.52 minutes and 40.39 Wh on the identical
+boundary. The GPU was 1.493 times faster and used 48.28% less gross package
+energy. The NPU accelerator itself averaged only 1.95 W; CPU-assigned graph
+work and data movement still dominate the complete NPU workflow.
+
+Hailo-8L took 63.41 minutes and measured 4.83 Wh across Raspberry Pi PMIC
+output rails. That smaller internal boundary is directional and is not ranked
+against APU package power. Candidate totals were 158 GPU, 180 NPU and 176
+Hailo; across 158 two-of-three consensus events their coverage was 91.14%,
+92.41% and 94.30%. A blind, disagreement-heavy review set found that Hailo's
+extra candidates more often included parked vehicles, cross traffic and
+duplicate tracks, so higher candidate count was not higher pass accuracy.
+See the benchmark guide for the review protocol, held-out threshold
+calibration and the exact-weight Hailo build path.
+
 ## Useful commands
 
 ```bash

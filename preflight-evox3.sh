@@ -9,6 +9,11 @@ allow_additional_sources=${GARMIN_ALLOW_ADDITIONAL_SOURCES:-0}
 minimum_free_kib=$((${GARMIN_MINIMUM_FREE_GIB:-100} * 1024 * 1024))
 allowed_output_root=${GARMIN_ALLOWED_OUTPUT_ROOT:-$project_root/output}
 
+if [[ -n "$source_exclude_file" && ! -r "$source_exclude_file" ]]; then
+  echo "source exclusion file is not readable: $source_exclude_file" >&2
+  exit 1
+fi
+
 resolved_output=$(realpath -m -- "$output_root")
 resolved_allowed=$(realpath -m -- "$allowed_output_root")
 case "$resolved_output" in
@@ -30,8 +35,18 @@ if [[ -z "$nfs_options" || ",${nfs_options}," != *,ro,* ]]; then
   exit 1
 fi
 
-front_count=$(find "$source_mount/$front_dir" -type f -name '*.mp4' | wc -l)
-rear_count=$(find "$source_mount/$rear_dir" -type f -name '*.mp4' | wc -l)
+count_sources() {
+  local camera_path=$1 source_host source_container count=0
+  while IFS= read -r -d '' source_host; do
+    source_container="/videos/${source_host#"$source_mount"/}"
+    source_is_excluded "$source_container" && continue
+    count=$((count + 1))
+  done < <(find "$camera_path" -type f -name '*.mp4' -print0)
+  printf '%s\n' "$count"
+}
+
+front_count=$(count_sources "$source_mount/$front_dir")
+rear_count=$(count_sources "$source_mount/$rear_dir")
 inventory_valid=1
 if (( expected_front > 0 )); then
   if [[ "$allow_additional_sources" == 1 ]]; then

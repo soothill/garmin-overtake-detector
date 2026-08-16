@@ -35,6 +35,23 @@ running batch. For a genuinely new batch, choose a new `GARMIN_BATCH_NAME` or
 remove only the new batch's unstarted manifest before launch. Never alter the
 source archive from the processing pipeline.
 
+If the archive deliberately retains a recording that was superseded by a
+longer copy, list the container path in a TSV and set
+`GARMIN_SOURCE_EXCLUDE_FILE` in the environment file:
+
+```text
+source\treason
+/videos/rct715/YYYY-MM-DD/old.mp4\treplaced by a longer recording of the same footage
+```
+
+Excluded files remain untouched in the read-only archive. A new batch copies
+the exclusion list to `excluded-sources.tsv`, and expected source counts apply
+to the authoritative inventory after exclusions.
+
+After a successful main batch, systemd automatically starts the skipped-event
+review. That service publishes validated rear-only fallback clips through the
+same mirror used for paired clips.
+
 ## Worker tuning
 
 - Front and rear detection use one GPU lane each.
