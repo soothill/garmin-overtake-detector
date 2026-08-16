@@ -6,6 +6,11 @@ GARMIN_SOURCE_MOUNT=/mnt/garmin
 GARMIN_FRONT_DIR=varia-vue
 GARMIN_REAR_DIR=rct715
 
+# Optional TSV with columns source and reason. Source paths use the container
+# namespace, for example /videos/rct715/YYYY-MM-DD/recording.mp4. This records
+# known superseded recordings without modifying the read-only archive.
+GARMIN_SOURCE_EXCLUDE_FILE=
+
 # Leave these at 0 to accept the inventory found when a new manifest is made.
 # Set exact counts once your archive is stable to detect missing source files.
 GARMIN_EXPECTED_FRONT_FILES=0

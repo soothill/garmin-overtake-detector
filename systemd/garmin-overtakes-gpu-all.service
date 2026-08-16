@@ -2,6 +2,7 @@
 Description=Hardened parallel Garmin front/rear processing and combined clips
 StartLimitIntervalSec=1800
 StartLimitBurst=5
+OnSuccess=garmin-overtakes-review-skipped.service
 
 [Service]
 Type=simple
