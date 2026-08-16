@@ -24,14 +24,15 @@ python3 scripts/export-yolov8-onnx.py \
   --output "$HOME/models/yolov8s/yolov8s.onnx"
 ```
 
-Extract calibration frames from a different ride than the benchmark pair.  A
-balanced 128-frame set uses 64 front and 64 rear images:
+Extract calibration frames from rides other than the benchmark and validation
+pairs. A balanced 512-frame set uses 256 front and 256 rear images; add other
+rides when one recording does not cover the required lighting and weather:
 
 ```bash
 scripts/extract-calibration-frames.sh \
-  FRONT.mp4 "$HOME/models/yolov8s/calibration" front 60 64
+  FRONT.mp4 "$HOME/models/yolov8s/calibration" front 20 256
 scripts/extract-calibration-frames.sh \
-  REAR.mp4 "$HOME/models/yolov8s/calibration" rear 60 64
+  REAR.mp4 "$HOME/models/yolov8s/calibration" rear 20 256
 ```
 
 Build the pinned AMD Quark environment and quantize the detector body.  The
@@ -56,8 +57,8 @@ fresh Vitis cache key whenever the model changes.
 
 The decision boundary is end-to-end efficiency, not the accelerator's quoted
 TOPS. Include decode, resize, tensor conversion, unsupported-operation fallback,
-tracking and clip encoding in any comparison.  In the controlled full-pair run,
-direct NPU power averaged only 1.92 W but APU package power averaged 88.54 W:
+tracking and clip encoding in any comparison. In the hardened full-pair run,
+direct NPU power averaged only 1.95 W but APU package power averaged 88.06 W:
 CPU work around the compiled subgraph dominated.  On the tested EVO-X3, ROCm
 GPU inference plus VAAPI remained the faster and more efficient production
 route even after detection agreement was brought close to the other platforms.

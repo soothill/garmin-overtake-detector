@@ -1,6 +1,7 @@
 import unittest
 
 from check_pi_health import parse_throttled
+from prepare_platform_review import EventNode, evenly_sample, union_find_components
 from sample_pi_pmic import parse_pmic_output
 from select_benchmark_pair import select_pair
 from summarize_platform_power import summarize
@@ -14,10 +15,18 @@ from wait_for_amd_idle import assess_window
 try:
     import numpy as np
 
-    from platform_video_benchmark import CommonTracker, Detection, _hailo_class_arrays
+    from platform_video_benchmark import (
+        CommonTracker,
+        Detection,
+        _hailo_class_arrays,
+        configure_hailo_runtime_nms,
+        letterbox_rgb,
+        rgb_to_ultralytics_bgr,
+    )
 except ImportError:
     np = None
-    CommonTracker = Detection = _hailo_class_arrays = None
+    CommonTracker = Detection = _hailo_class_arrays = configure_hailo_runtime_nms = None
+    letterbox_rgb = rgb_to_ultralytics_bgr = None
 
 try:
     from npu_detect_frames import decode_outputs
@@ -36,12 +45,60 @@ class PlatformBenchmarkTests(unittest.TestCase):
         self.assertEqual(len(tracks[0].observations), 2)
 
     @unittest.skipIf(np is None, "NumPy is supplied by the benchmark runtimes")
+    def test_rgb_contract_is_explicit_for_ultralytics(self):
+        rgb = np.zeros((1, 2, 3), dtype=np.uint8)
+        rgb[0, 0] = [11, 22, 33]
+        canvas, _, _, _ = letterbox_rgb(rgb, 2)
+        bgr = rgb_to_ultralytics_bgr(canvas)
+        self.assertEqual(canvas[0, 0].tolist(), [11, 22, 33])
+        self.assertEqual(bgr[0, 0].tolist(), [33, 22, 11])
+        self.assertTrue(bgr.flags.c_contiguous)
+
+    @unittest.skipIf(np is None, "NumPy is supplied by the benchmark runtimes")
+    def test_low_confidence_detection_continues_but_does_not_start_track(self):
+        tracker = CommonTracker(start_confidence=0.20, continuation_confidence=0.10)
+        tracker.update(0.0, [Detection(2, 0.12, 0.70, 0.50, 0.90, 0.90)])
+        self.assertEqual(tracker.finish(), [])
+
+        tracker = CommonTracker(start_confidence=0.20, continuation_confidence=0.10)
+        tracker.update(0.0, [Detection(2, 0.80, 0.70, 0.50, 0.90, 0.90)])
+        tracker.update(0.2, [Detection(2, 0.12, 0.65, 0.45, 0.86, 0.84)])
+        tracks = tracker.finish()
+        self.assertEqual(len(tracks), 1)
+        self.assertEqual(len(tracks[0].observations), 2)
+
+    @unittest.skipIf(np is None, "NumPy is supplied by the benchmark runtimes")
+    def test_vehicle_class_switch_does_not_split_track(self):
+        tracker = CommonTracker()
+        tracker.update(0.0, [Detection(2, 0.90, 0.70, 0.50, 0.90, 0.90)])
+        tracker.update(0.2, [Detection(7, 0.70, 0.65, 0.45, 0.86, 0.84)])
+        tracker.update(0.4, [Detection(2, 0.80, 0.60, 0.40, 0.82, 0.78)])
+        tracks = tracker.finish()
+        self.assertEqual(len(tracks), 1)
+        self.assertEqual(len(tracks[0].observations), 3)
+        self.assertEqual(tracks[0].class_id, 2)
+
+    @unittest.skipIf(np is None, "NumPy is supplied by the benchmark runtimes")
     def test_hailo_tensorflow_nms_shape_is_normalized(self):
         raw = np.zeros((1, 80, 5, 100), dtype=np.float32)
         raw[0, 2, :, 0] = [0.1, 0.2, 0.8, 0.9, 0.75]
         classes = _hailo_class_arrays(raw)
         self.assertEqual(classes[2].shape, (100, 5))
         self.assertAlmostEqual(float(classes[2][0, 4]), 0.75)
+
+    @unittest.skipIf(np is None, "NumPy is supplied by the benchmark runtimes")
+    def test_hailo_runtime_nms_is_overridden(self):
+        class Pipeline:
+            def set_nms_score_threshold(self, value):
+                self.score = value
+
+            def set_nms_iou_threshold(self, value):
+                self.iou = value
+
+        pipeline = Pipeline()
+        configure_hailo_runtime_nms(pipeline, 0.1, 0.5)
+        self.assertEqual(pipeline.score, 0.1)
+        self.assertEqual(pipeline.iou, 0.5)
 
     @unittest.skipIf(
         np is None or decode_outputs is None,
@@ -112,6 +169,21 @@ class PlatformBenchmarkTests(unittest.TestCase):
             match_event_pairs([10.0, 20.0], [20.25, 40.0], 1.0),
             [(1, 0, 0.25)],
         )
+
+    def test_review_components_preserve_platform_only_and_shared_events(self):
+        nodes = [
+            EventNode("gpu", "front", 0, {"peak_time": 10.0}),
+            EventNode("npu", "front", 0, {"peak_time": 10.5}),
+            EventNode("hailo", "front", 0, {"peak_time": 30.0}),
+        ]
+        components = union_find_components(nodes, 2.0)
+        self.assertEqual(len(components), 2)
+        self.assertEqual({item.platform for item in components[0]}, {"gpu", "npu"})
+        self.assertEqual({item.platform for item in components[1]}, {"hailo"})
+
+    def test_even_review_sample_includes_both_ends(self):
+        values = [[index] for index in range(10)]
+        self.assertEqual(evenly_sample(values, 3), [[0], [4], [9]])
 
     def test_three_platform_consensus_counts_two_of_three_events(self):
         records = {

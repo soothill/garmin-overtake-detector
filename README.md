@@ -152,25 +152,28 @@ quantizes them to XINT8 with AMD Quark and executes that graph through Ryzen
 AI.  Detection and event totals are included so power cannot be interpreted
 without output quality.  See
 [Platform efficiency benchmark](docs/PLATFORM-BENCHMARK.md) for setup,
-measurement boundaries and reproducible commands.
+measurement boundaries and reproducible commands. See the
+[Hailo-8L model build](docs/HAILO.md) for compiling the exact GPU weights into
+an HEF and preserving calibration and model hashes.
 
-On one complete 3.168-source-hour paired recording, the Radeon YOLOv8s run took
-12.26 minutes and 14.93 Wh of APU package energy.  The same-source YOLOv8s XINT8
-NPU run took 28.07 minutes and 41.42 Wh on the same package boundary.  The GPU
-was 2.29 times faster and used 63.95% less gross energy.  The NPU accelerator
-itself averaged only 1.92 W; most package power came from CPU work around the
-compiled subgraph, making execution-provider partitioning the next optimization.
-Hailo-8L took 63.35 minutes and measured 4.81 Wh across Raspberry Pi PMIC output
-rails; that smaller internal boundary is directional and is not ranked against
-APU package power.
+The hardened parity rerun on one complete 3.168-source-hour paired recording
+uses RGB24, common 0.10 continuation/0.20 track-start confidence, 0.50 NMS,
+class-agnostic vehicle association and robust trajectory geometry. Radeon GPU
+finished in 18.43 minutes and used 20.89 Wh of APU package energy. Same-source
+YOLOv8s XINT8 on the NPU took 27.52 minutes and 40.39 Wh on the identical
+boundary. The GPU was 1.493 times faster and used 48.28% less gross package
+energy. The NPU accelerator itself averaged only 1.95 W; CPU-assigned graph
+work and data movement still dominate the complete NPU workflow.
 
-Across 154 events supported by at least two platforms, GPU, same-model NPU and
-Hailo found 92.21%, 94.81% and 96.75% respectively.  The NPU's coverage rose
-16.14 percentage points over the earlier vendor YOLOv8m deployment, showing
-why model parity matters.  NPU and Hailo also produced more unconfirmed
-candidates, so this is detection agreement rather than labelled precision or
-recall.  The benchmark guide describes how to build a labelled set, calibrate
-per-backend thresholds and move toward equal recall.
+Hailo-8L took 63.41 minutes and measured 4.83 Wh across Raspberry Pi PMIC
+output rails. That smaller internal boundary is directional and is not ranked
+against APU package power. Candidate totals were 158 GPU, 180 NPU and 176
+Hailo; across 158 two-of-three consensus events their coverage was 91.14%,
+92.41% and 94.30%. A blind, disagreement-heavy review set found that Hailo's
+extra candidates more often included parked vehicles, cross traffic and
+duplicate tracks, so higher candidate count was not higher pass accuracy.
+See the benchmark guide for the review protocol, held-out threshold
+calibration and the exact-weight Hailo build path.
 
 ## Useful commands
 

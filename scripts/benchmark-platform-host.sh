@@ -97,7 +97,9 @@ common=(
   --detect-width 640
   --model-size 640
   --confidence "${PLATFORM_BENCH_CONFIDENCE:-0.20}"
+  --track-confidence "${PLATFORM_BENCH_TRACK_CONFIDENCE:-0.10}"
   --iou "${PLATFORM_BENCH_IOU:-0.50}"
+  --track-gap "${PLATFORM_BENCH_TRACK_GAP:-1.4}"
   --decoder-threads "${PLATFORM_BENCH_DECODER_THREADS:-0}"
   --progress-every "${PLATFORM_BENCH_PROGRESS_EVERY:-500}"
 )
@@ -138,6 +140,10 @@ case "$backend" in
       --decode vaapi --ffmpeg "$script_dir/scripts/container-ffmpeg.sh"
       --ffprobe "$script_dir/scripts/container-ffprobe.sh"
     )
+    npu_metadata=${PLATFORM_BENCH_NPU_METADATA:-${npu_model%.onnx}.metadata.json}
+    if [[ -r "$npu_metadata" ]]; then
+      command+=(--model-metadata "$npu_metadata")
+    fi
     ;;
   hailo)
     hailo_model=${PLATFORM_BENCH_HAILO_MODEL:-/usr/local/hailo/resources/models/hailo8l/yolov8s.hef}
@@ -145,6 +151,10 @@ case "$backend" in
       python3 "$script_dir/platform_video_benchmark.py"
       "${common[@]}" --model "$hailo_model" --decode drm
     )
+    hailo_metadata=${PLATFORM_BENCH_HAILO_METADATA:-${hailo_model%.hef}.metadata.json}
+    if [[ -r "$hailo_metadata" ]]; then
+      command+=(--model-metadata "$hailo_metadata")
+    fi
     ;;
   *) echo "unsupported backend: $backend" >&2; exit 2 ;;
 esac

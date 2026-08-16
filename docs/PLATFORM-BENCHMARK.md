@@ -45,6 +45,22 @@ not an isolated-silicon comparison.  Always compare vehicle-detection and
 candidate-event counts alongside energy.  A backend which saves energy by
 missing much of the workload has not produced an equivalent result.
 
+The decoder contract is explicitly RGB24.  The GPU adapter converts that RGB
+array once to the BGR array expected by the Ultralytics Python API; Ultralytics
+then performs its normal model-facing RGB conversion.  The NPU and Hailo
+adapters receive RGB directly.  Result metadata records all three stages.
+
+Every backend applies 0.10 as the low-confidence continuation threshold, 0.20
+as the threshold for starting a vehicle track, and class-wise NMS at IoU 0.50.
+The Hailo adapter must successfully override the HEF's embedded NMS values at
+runtime or the benchmark aborts.  The shared tracker associates all four COCO
+vehicle classes together and assigns the final class by confidence-weighted
+majority, preventing car/truck class changes from splitting one vehicle.
+Trajectory decisions use a three-frame rolling median for area, horizontal
+position and bottom-edge position once a track contains at least five samples.
+This prevents one malformed endpoint box from deciding growth, centreline or
+radial-motion checks while preserving the original rules for very short tracks.
+
 Power boundaries are also explicit:
 
 - AMD SMI supplies APU socket, GPU and NPU power.  Gross and idle-adjusted
@@ -247,6 +263,17 @@ Inspect at least:
 - unchanged source evidence; and
 - model/runtime versions.
 
+Generate the detailed class, confidence, track-fragmentation and event-timing
+comparison with:
+
+```bash
+python3 analyze_platform_detection.py \
+  --result gpu:results/RUN/gpu/result.json \
+  --result npu:results/RUN/npu/result.json \
+  --result hailo:results/RUN/hailo/result.json \
+  --output results/RUN/detection-analysis.json
+```
+
 ### Detection agreement and parity
 
 The aggregate JSON contains the matched and unmatched event evidence for each
@@ -258,6 +285,46 @@ before calling them false positives or misses.
 The report also divides wall time and measured energy by the consensus events
 that each platform actually supported.  This quality-adjusted view prevents a
 backend from appearing efficient merely because it returned less useful work.
+
+Build a blind review set after all three results exist. This includes every
+disagreement component and an evenly distributed sample of events reported by
+all three platforms:
+
+```bash
+python3 prepare_platform_review.py \
+  --result gpu:results/RUN/gpu/result.json \
+  --result npu:results/RUN/npu/result.json \
+  --result hailo:results/RUN/hailo/result.json \
+  --source front:/mnt/garmin/varia-vue/DATE/front.mp4 \
+  --source rear:/mnt/garmin/rct715/DATE/rear.mp4 \
+  --output-dir results/RUN/review --extract-clips
+```
+
+Review clips without using the `platforms` field as a quality cue. Fill
+`vehicle_present` and `overtake_pass` with `yes`, `no`, or `uncertain`, then
+calculate precision, recall and F1 within the reviewed candidate universe:
+
+```bash
+python3 score_platform_labels.py \
+  --labels results/RUN/review/labels.csv \
+  --output results/RUN/review/scores.json
+```
+
+For faster first-pass review, render three timepoints per event into labelled
+contact sheets. Use the original clips whenever the three frames are
+ambiguous:
+
+```bash
+python3 render_platform_review_sheets.py \
+  --labels results/RUN/review/labels.csv \
+  --source front:/mnt/garmin/varia-vue/DATE/front.mp4 \
+  --source rear:/mnt/garmin/rct715/DATE/rear.mp4 \
+  --selection-reason disagreement \
+  --output-dir results/RUN/review/sheets
+```
+
+These scores do not measure passes missed by all three platforms. Add randomly
+sampled source intervals before claiming population-level recall.
 
 Even with exact source weights, quantization, execution-provider partitioning,
 preprocessing, output decoding and non-maximum suppression can move an event
@@ -283,37 +350,48 @@ Repeat each run at least three times, alternate platform order, and use the
 median for a publication-quality conclusion.  One complete run is useful for
 engineering direction, but it does not quantify run-to-run variance.
 
-## Measured same-model engineering result
+## Measured hardened parity engineering result
 
 One complete run used a roughly 95-minute file from each camera: 3.168 source
-hours in total.  The fixed protocol was 5 fps, 640-pixel detection width,
-640x640 model input, 0.20 confidence and 0.50 IoU.  Both AMD runs passed a clean
+hours in total. The fixed protocol was 5 fps, 640-pixel detection width,
+640x640 model input, 0.10 continuation confidence, 0.20 track-start
+confidence, 0.50 IoU and a 1.4-second track gap. Both AMD runs passed a clean
 30-sample idle gate and used the same APU package power boundary.
 
 | Platform | Wall time | Real-time factor | Gross energy | Wh/source-hour | Candidates | Two-of-three consensus coverage |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Radeon GPU YOLOv8s | 12.26 min | 15.719x | 14.93 Wh package | 4.713 | 153 | 92.21% |
-| Ryzen AI NPU YOLOv8s XINT8 | 28.07 min | 6.774x | 41.42 Wh package | 13.074 | 167 | 94.81% |
-| Hailo-8L YOLOv8s HEF | 63.35 min | 3.001x | 4.81 Wh Pi PMIC rails | 1.517 | 176 | 96.75% |
+| Radeon GPU YOLOv8s | 18.43 min | 10.389x | 20.89 Wh package | 6.593 | 158 | 91.14% |
+| Ryzen AI NPU YOLOv8s XINT8 | 27.52 min | 6.909x | 40.39 Wh package | 12.749 | 180 | 92.41% |
+| Hailo-8L YOLOv8s HEF | 63.41 min | 2.998x | 4.83 Wh Pi PMIC rails | 1.525 | 176 | 94.30% |
 
-For the directly comparable GPU/NPU result, the GPU finished 56.32% sooner and
-used 63.95% less gross package energy (65.20% less after subtracting each idle
-baseline).  It was therefore both faster and more energy-efficient for this
-end-to-end workload.  The Hailo energy is deliberately excluded from that
+For the directly comparable GPU/NPU result, the GPU finished 33.02% sooner and
+used 48.28% less gross package energy (50.42% less after subtracting each idle
+baseline). It was therefore both faster and more energy-efficient for this
+end-to-end workload. The Hailo energy is deliberately excluded from that
 ranking because its internal Pi rail measurement is not the same boundary.
 
-The three backends produced 154 two-of-three consensus event clusters.  GPU,
-NPU and Hailo supported 142, 146 and 149 respectively.  Same-source YOLOv8s
-raised NPU consensus coverage by 16.14 percentage points over the earlier
-YOLOv8m deployment.  Human review of remaining disagreements is required
-before calling them misses or false positives.
+The three backends produced 158 two-of-three consensus event clusters. GPU,
+NPU and Hailo supported 144, 146 and 149 respectively. A blind review of all
+110 disagreements plus 20 sampled unanimous events produced 107 yes/no labels
+and left 23 uncertain. In that deliberately difficult review set, GPU, NPU
+and Hailo F1 was 0.683, 0.708 and 0.615. Many Hailo-only events were parked
+vehicles, cross traffic or duplicate tracks; its higher candidate total did
+not mean better pass accuracy.
 
-The NPU core averaged only 1.92 W, while the complete APU package averaged
-88.54 W.  About 79.28 W of CPU-core power was observed during the run.  This
-shows that the standard ONNX deployment leaves substantial work around the
-compiled XINT8 subgraph.  A raw-head, compiler-friendly export and reduced CPU
-post-processing are the next efficiency experiments.  Direct NPU watts must
-not be reported as whole-workflow efficiency.
+The NPU core averaged only 1.95 W, while the complete APU package averaged
+88.06 W. ONNX Runtime also reported that some shape/post-processing nodes were
+assigned to CPU. This shows that the standard ONNX deployment leaves
+substantial work around the compiled XINT8 subgraph. A raw-head,
+compiler-friendly export and reduced CPU post-processing are the next
+efficiency experiments. Direct NPU watts must not be reported as
+whole-workflow efficiency.
+
+Confidence-only tuning on this same review set suggested approximately 0.75
+for GPU and 0.78 for NPU, improving precision with small recall losses. It did
+little for Hailo. These are exploratory overfit values and are not deployment
+defaults; validate them on a separately labelled ride. Hailo also needs an
+exact-source-weight HEF before remaining detector differences can be
+attributed to hardware or quantization rather than the vendor model.
 
 The full result also needs repeated, alternating-order trials before quoting a
 confidence interval.

@@ -136,7 +136,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--calibration-dir", required=True, type=Path)
-    parser.add_argument("--calibration-count", type=int, default=128)
+    parser.add_argument("--calibration-count", type=int, default=512)
     parser.add_argument("--config", default="XINT8")
     parser.add_argument("--metadata", type=Path)
     return parser.parse_args()

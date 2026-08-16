@@ -33,6 +33,8 @@ from overtake_pipeline import (
 
 
 VEHICLE_CLASSES = {2, 3, 5, 7}
+DECODE_PIXEL_FORMAT = "rgb24"
+PROTOCOL_VERSION = "platform-parity-v2"
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,8 @@ class Detection:
 @dataclass
 class ActiveTrack:
     history: TrackHistory
+    class_scores: dict[int, float]
+    class_counts: dict[int, int]
 
     @property
     def last_detection(self) -> Detection:
@@ -94,16 +98,43 @@ class CommonTracker:
 
     def __init__(
         self,
-        track_gap: float = 1.0,
+        track_gap: float = 1.4,
         minimum_iou: float = 0.10,
         maximum_center_distance: float = 0.10,
+        start_confidence: float = 0.20,
+        continuation_confidence: float = 0.10,
     ) -> None:
+        if continuation_confidence > start_confidence:
+            raise ValueError("continuation confidence cannot exceed start confidence")
         self.track_gap = track_gap
         self.minimum_iou = minimum_iou
         self.maximum_center_distance = maximum_center_distance
+        self.start_confidence = start_confidence
+        self.continuation_confidence = continuation_confidence
         self.next_id = 1
         self.active: dict[int, ActiveTrack] = {}
         self.completed: list[TrackHistory] = []
+
+    @staticmethod
+    def _record_class(track: ActiveTrack, detection: Detection) -> None:
+        track.class_scores[detection.class_id] = (
+            track.class_scores.get(detection.class_id, 0.0) + detection.confidence
+        )
+        track.class_counts[detection.class_id] = (
+            track.class_counts.get(detection.class_id, 0) + 1
+        )
+
+    @staticmethod
+    def _finalize(track: ActiveTrack) -> TrackHistory:
+        track.history.class_id = max(
+            track.class_scores,
+            key=lambda class_id: (
+                track.class_scores[class_id],
+                track.class_counts[class_id],
+                -class_id,
+            ),
+        )
+        return track.history
 
     def _close_stale(self, timestamp: float) -> None:
         stale = [
@@ -112,16 +143,19 @@ class CommonTracker:
             if timestamp - track.history.last_seen > self.track_gap
         ]
         for identifier in stale:
-            self.completed.append(self.active.pop(identifier).history)
+            self.completed.append(self._finalize(self.active.pop(identifier)))
 
     def update(self, timestamp: float, detections: Sequence[Detection]) -> None:
         self._close_stale(timestamp)
+        detections = [
+            detection
+            for detection in detections
+            if detection.confidence >= self.continuation_confidence
+        ]
         possible: list[tuple[float, float, int, int]] = []
         for identifier, track in self.active.items():
             previous = track.last_detection
             for detection_index, detection in enumerate(detections):
-                if detection.class_id != track.history.class_id:
-                    continue
                 overlap = box_iou(previous, detection)
                 distance = center_distance(previous, detection)
                 area_ratio = max(previous.area, detection.area) / max(
@@ -148,11 +182,14 @@ class CommonTracker:
                     detection.confidence,
                 )
             )
+            self._record_class(self.active[identifier], detection)
             used_tracks.add(identifier)
             used_detections.add(detection_index)
 
         for index, detection in enumerate(detections):
             if index in used_detections:
+                continue
+            if detection.confidence < self.start_confidence:
                 continue
             identifier = self.next_id
             self.next_id += 1
@@ -167,10 +204,14 @@ class CommonTracker:
                     detection.confidence,
                 )
             )
-            self.active[identifier] = ActiveTrack(history)
+            self.active[identifier] = ActiveTrack(
+                history,
+                {detection.class_id: detection.confidence},
+                {detection.class_id: 1},
+            )
 
     def finish(self) -> list[TrackHistory]:
-        self.completed.extend(item.history for item in self.active.values())
+        self.completed.extend(self._finalize(item) for item in self.active.values())
         self.active.clear()
         return self.completed
 
@@ -192,6 +233,14 @@ def letterbox_rgb(
     canvas = np.full((size, size, 3), 114, dtype=np.uint8)
     canvas[top : top + resized_height, left : left + resized_width] = frame
     return canvas, scale, left, top
+
+
+def rgb_to_ultralytics_bgr(frame_rgb: np.ndarray) -> np.ndarray:
+    """Convert the explicit RGB decoder contract to Ultralytics' BGR API."""
+
+    if frame_rgb.ndim != 3 or frame_rgb.shape[2] != 3:
+        raise ValueError(f"expected an RGB HxWx3 frame, got {frame_rgb.shape}")
+    return np.ascontiguousarray(frame_rgb[:, :, ::-1])
 
 
 def normalized_detection(
@@ -239,6 +288,7 @@ class GpuDetector:
             raise RuntimeError("ROCm/CUDA GPU is unavailable to PyTorch")
         self.device = args.device
         self.confidence = args.confidence
+        self.inference_confidence = args.track_confidence
         self.iou = args.iou
         self.model_size = args.model_size
         self.model_path = str(args.model)
@@ -248,9 +298,9 @@ class GpuDetector:
     def infer(self, frame: np.ndarray) -> list[Detection]:
         canvas, scale, pad_left, pad_top = letterbox_rgb(frame, self.model_size)
         result = self.model.predict(
-            canvas[:, :, ::-1].copy(),
+            rgb_to_ultralytics_bgr(canvas),
             classes=sorted(VEHICLE_CLASSES),
-            conf=self.confidence,
+            conf=self.inference_confidence,
             iou=self.iou,
             imgsz=self.model_size,
             device=self.device,
@@ -287,6 +337,12 @@ class GpuDetector:
             "device": self.device_name,
             "precision": "FP16",
             "model_parameter_dtype": str(next(self.model.model.parameters()).dtype),
+            "decoder_pixel_format": DECODE_PIXEL_FORMAT,
+            "backend_api_pixel_format": "bgr24",
+            "model_input_color": "RGB",
+            "inference_confidence": self.inference_confidence,
+            "candidate_start_confidence": self.confidence,
+            "effective_nms_iou": self.iou,
         }
 
     def close(self) -> None:
@@ -334,6 +390,7 @@ class NpuDetector:
         self.output_shapes = [list(item.shape) for item in self.session.get_outputs()]
         self.decode_outputs = decode_outputs
         self.confidence = args.confidence
+        self.inference_confidence = args.track_confidence
         self.iou = args.iou
         self.model_size = args.model_size
         self.model_path = str(args.model)
@@ -348,7 +405,7 @@ class NpuDetector:
         )
         decoded = self.decode_outputs(
             outputs,
-            confidence=self.confidence,
+            confidence=self.inference_confidence,
             iou_threshold=self.iou,
             scale=scale,
             pad_left=pad_left,
@@ -371,6 +428,12 @@ class NpuDetector:
             "input_layout": self.input_layout,
             "input_shape": self.input_shape,
             "output_shapes": self.output_shapes,
+            "decoder_pixel_format": DECODE_PIXEL_FORMAT,
+            "backend_api_pixel_format": "rgb24",
+            "model_input_color": "RGB",
+            "inference_confidence": self.inference_confidence,
+            "candidate_start_confidence": self.confidence,
+            "effective_nms_iou": self.iou,
         }
 
     def close(self) -> None:
@@ -404,6 +467,20 @@ def _hailo_class_arrays(value: object) -> list[np.ndarray]:
     )
 
 
+def configure_hailo_runtime_nms(
+    pipeline: object, score_threshold: float, iou_threshold: float
+) -> None:
+    required = ("set_nms_score_threshold", "set_nms_iou_threshold")
+    missing = [name for name in required if not hasattr(pipeline, name)]
+    if missing:
+        raise RuntimeError(
+            "HailoRT cannot enforce the common NMS settings; missing: "
+            + ", ".join(missing)
+        )
+    pipeline.set_nms_score_threshold(score_threshold)
+    pipeline.set_nms_iou_threshold(iou_threshold)
+
+
 class HailoDetector:
     name = "hailo"
 
@@ -420,6 +497,8 @@ class HailoDetector:
         self.model_size = args.model_size
         self.model_path = str(args.model)
         self.confidence = args.confidence
+        self.inference_confidence = args.track_confidence
+        self.iou = args.iou
         self.vdevice = VDevice()
         self.hef = HEF(self.model_path)
         self.configured = self.vdevice.configure(self.hef)[0]
@@ -435,6 +514,9 @@ class HailoDetector:
             self.configured, input_params, output_params, tf_nms_format=False
         )
         self.pipeline.__enter__()
+        configure_hailo_runtime_nms(
+            self.pipeline, self.inference_confidence, self.iou
+        )
         self.input_name = self.hef.get_input_vstream_infos()[0].name
         self.output_name = self.hef.get_output_vstream_infos()[0].name
 
@@ -446,7 +528,7 @@ class HailoDetector:
         for class_id in sorted(VEHICLE_CLASSES):
             for row in class_arrays[class_id]:
                 y_min, x_min, y_max, x_max, score = (float(value) for value in row[:5])
-                if score < self.confidence:
+                if score < self.inference_confidence:
                     continue
                 normalized = max(abs(x_min), abs(y_min), abs(x_max), abs(y_max)) <= 2.0
                 detection = normalized_detection(
@@ -471,6 +553,13 @@ class HailoDetector:
             "model": self.model_path,
             "device": "Hailo-8L",
             "precision": "quantized HEF",
+            "decoder_pixel_format": DECODE_PIXEL_FORMAT,
+            "backend_api_pixel_format": "rgb24",
+            "model_input_color": "RGB",
+            "inference_confidence": self.inference_confidence,
+            "candidate_start_confidence": self.confidence,
+            "effective_nms_iou": self.iou,
+            "nms_configuration": "HailoRT runtime override",
         }
 
     def close(self) -> None:
@@ -524,7 +613,7 @@ def frame_reader(
             "-f",
             "rawvideo",
             "-pix_fmt",
-            "rgb24",
+            DECODE_PIXEL_FORMAT,
             "pipe:1",
         ]
     )
@@ -628,7 +717,11 @@ def process_camera(
     if detect_height % 2:
         detect_height += 1
     tracker = CommonTracker(
-        args.track_gap, args.minimum_track_iou, args.maximum_center_distance
+        args.track_gap,
+        args.minimum_track_iou,
+        args.maximum_center_distance,
+        args.confidence,
+        args.track_confidence,
     )
     frames = 0
     detections_seen = 0
@@ -694,6 +787,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rear", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--model", required=True, type=Path)
+    parser.add_argument("--model-metadata", type=Path)
     parser.add_argument("--cache-dir", type=Path)
     parser.add_argument("--cache-key", default="paired-platform-benchmark-v1")
     parser.add_argument("--device", default="0")
@@ -705,8 +799,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--detect-width", type=int, default=640)
     parser.add_argument("--model-size", type=int, default=640)
     parser.add_argument("--confidence", type=float, default=0.20)
+    parser.add_argument("--track-confidence", type=float, default=0.10)
     parser.add_argument("--iou", type=float, default=0.50)
-    parser.add_argument("--track-gap", type=float, default=1.0)
+    parser.add_argument("--track-gap", type=float, default=1.4)
     parser.add_argument("--minimum-track-iou", type=float, default=0.10)
     parser.add_argument("--maximum-center-distance", type=float, default=0.10)
     parser.add_argument("--duration", type=float)
@@ -720,6 +815,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.rear = args.rear.resolve()
     args.output_dir = args.output_dir.resolve()
     args.model = args.model.resolve()
+    if args.model_metadata is not None:
+        args.model_metadata = args.model_metadata.resolve()
     if args.cache_dir is not None:
         args.cache_dir = args.cache_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -752,8 +849,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     detector_metadata = detector.metadata()
     detector_metadata["model_sha256"] = model_sha256
+    if args.model_metadata is not None:
+        detector_metadata["model_build_metadata"] = json.loads(
+            args.model_metadata.read_text(encoding="utf-8")
+        )
+        detector_metadata["model_build_metadata_sha256"] = sha256_file(
+            args.model_metadata
+        )
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "protocol_version": PROTOCOL_VERSION,
         "benchmark_scope": "common detection, tracking, trajectory evaluation, and reports; no clips",
         "backend": args.backend,
         "detector": detector_metadata,
@@ -767,10 +872,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "detect_width": args.detect_width,
             "model_size": args.model_size,
             "confidence": args.confidence,
+            "track_confidence": args.track_confidence,
             "iou": args.iou,
             "track_gap": args.track_gap,
             "minimum_track_iou": args.minimum_track_iou,
             "maximum_center_distance": args.maximum_center_distance,
+            "class_agnostic_vehicle_tracking": True,
+            "decoder_pixel_format": DECODE_PIXEL_FORMAT,
             "decode": args.decode,
             "decoder_threads": args.decoder_threads or "automatic",
             "pair_scheduling": "sequential",
